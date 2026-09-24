@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="tr"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><style>body {transition: opacity ease-in 0.2s; } 
+body[unresolved] {opacity: 0; display: block; overflow: hidden; position: relative; } 
+</style>
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Box Spill V4</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@500;700;800&display=swap');
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 50%, #f0fdf4 100%);
+            font-family: 'Outfit', sans-serif;
+            color: #1e293b;
+            overflow: hidden;
+            transition: opacity ease-in 0.2s;
+        }
+        
+        .game-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            max-width: 460px;
+            padding: 10px;
+        }
+
+        .ui-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            padding: 10px 16px;
+            margin-bottom: 12px;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            border-radius: 20px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+            position: relative;
+            z-index: 10;
+        }
+
+        .ui-header button {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: #ffffff;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 14px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+            transition: all 0.2s ease;
+            outline: none;
+        }
+
+        .ui-header button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+            background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%);
+        }
+
+        .ui-header button:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .ui-header button:disabled {
+            background: #cbd5e1;
+            color: #94a3b8;
+            cursor: not-allowed;
+            box-shadow: none;
+            opacity: 0.7;
+        }
+
+        .ui-header h2 {
+            margin: 0;
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            color: #334155;
+            text-transform: uppercase;
+        }
+
+        canvas {
+            background-color: transparent;
+            box-shadow: 0 20px 30px -10px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(255, 255, 255, 0.6);
+            max-height: calc(100vh - 100px);
+            max-width: 100%;
+            object-fit: contain;
+            border-radius: 24px;
+            position: relative;
+            z-index: 1;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-wrapper">
+    <div class="ui-header">
+        <button id="prevBtn" disabled="">&lt; Önceki</button>
+        <h2 id="levelText">Level 1</h2>
+        <button id="nextBtn">Sonraki &gt;</button>
+    </div>
+
+    <canvas id="gameCanvas" width="450" height="880"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const levelText = document.getElementById('levelText');
+
+    const CELL_SIZE = 60; 
+    const GRID_PADDING = 5; 
+    const BOTTOM_HALF_Y = 450; 
+
+    let GRID_SIZE; 
+    let GRID_TOTAL_SIZE;
+    let OFFSET_X;
+    let OFFSET_Y;
+
+    const QUEUE_VISIBLE_SIZE = 21; 
+    const QUEUE_BALL_RADIUS = 18; 
+    
+    const pathSegments = [];
+    let cumulativeLen = 0;
+
+    function addLine(x0, y0, x1, y1) {
+        let len = Math.hypot(x1 - x0, y1 - y0);
+        pathSegments.push({ type: 'line', p0: {x: x0, y: y0}, p1: {x: x1, y: y1}, len: len, startLen: cumulativeLen, endLen: cumulativeLen + len });
+        cumulativeLen += len;
+    }
+
+    function addArc(cx, cy, r, startA, endA, ccw) {
+        let len = Math.PI * r; 
+        pathSegments.push({ type: 'arc', center: {x: cx, y: cy}, r: r, startAngle: startA, endAngle: endA, ccw: ccw, len: len, startLen: cumulativeLen, endLen: cumulativeLen + len });
+        cumulativeLen += len;
+    }
+
+    addLine(225, 420, 130, 420); 
+    addArc(130, 380, 40, Math.PI/2, Math.PI*1.5, false);
+    addLine(130, 340, 320, 340);
+    addArc(320, 300, 40, Math.PI/2, -Math.PI/2, true);
+    addLine(320, 260, 130, 260); 
+
+    const QUEUE_SPACING = cumulativeLen / (QUEUE_VISIBLE_SIZE - 1);
+
+    function getPathPos(d) {
+        for (let seg of pathSegments) {
+            if (d >= seg.startLen && d <= seg.endLen) {
+                let t = (d - seg.startLen) / seg.len;
+                if (seg.type === 'line') {
+                    return {
+                        x: seg.p0.x + (seg.p1.x - seg.p0.x) * t,
+                        y: seg.p0.y + (seg.p1.y - seg.p0.y) * t
+                    };
+                } else if (seg.type === 'arc') {
+                    let angle = seg.ccw 
+                        ? seg.startAngle - Math.PI * t 
+                        : seg.startAngle + Math.PI * t;
+                    
+                    return {
+                        x: seg.center.x + Math.cos(angle) * seg.r,
+                        y: seg.center.y + Math.sin(angle) * seg.r
+                    };
+                }
+            }
+        }
+        
+        let lastSeg = pathSegments[pathSegments.length - 1];
+        let over = d - lastSeg.endLen;
+        let dirX = (lastSeg.p1.x - lastSeg.p0.x) / lastSeg.len;
+        let dirY = (lastSeg.p1.y - lastSeg.p0.y) / lastSeg.len;
+        return {
+            x: lastSeg.p1.x + dirX * over,
+            y: lastSeg.p1.y + dirY * over
+        };
+    }
+
+    let queueBalls = []; 
+    
+    let ballProcessState = 'IDLE'; 
+    let matchQueue = []; 
+    let flyingBalls = [];
+    let remainingBallsQueue = []; 
+
+    let grid; 
+    let gameState = 'PLAYING'; 
+    let currentLevel = 0; 
+
+    const COLORS = {
+        red: '#ff4757',
+        blue: '#1e90ff',
+        green: '#2ed573',
+        yellow: '#ffa502',
+        purple: '#8e5cf7'
+    };
+
+    function createBox(color, num, dir) {
+        return { type: 'box', color, num, dir, state: 'idle', time: 0, scale: 1, offsetX: 0, offsetY: 0 };
+    }
+
+    // YENİ TASARIM: ÇOK KUTU (ARROW) / MİNİMAL BEDEN VE YOL KAVŞAĞI
+    const levels = [
+        // Level 1: 3x3 Grid (3 Arrow, 0 Kavşak - Tamamen paralel)
+        function() {
+            GRID_SIZE = 3;
+            grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+            
+            grid[0][0] = createBox(COLORS.red, 2, 'right');
+            grid[1][2] = createBox(COLORS.blue, 2, 'left');
+            grid[2][0] = createBox(COLORS.green, 2, 'right');
+        },
+        
+        // Level 2: 4x4 Grid (6 Arrow, Sadece 1 Stratejik Çarpışma)
+        function() {
+            GRID_SIZE = 4;
+            grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+            
+            // Simetrik dış döngü (Asla birbirini kesmez)
+            grid[0][0] = createBox(COLORS.yellow, 2, 'right'); 
+            grid[0][3] = createBox(COLORS.red, 2, 'down');     
+            grid[3][3] = createBox(COLORS.blue, 2, 'left');    
+            grid[3][0] = createBox(COLORS.green, 2, 'up');     
+            
+            // İçeride birbirini çok hafif etkileyen iki ok
+            grid[1][1] = createBox(COLORS.purple, 2, 'right'); // Kırmızının yoluna dokunur
+            grid[2][2] = createBox(COLORS.yellow, 2, 'left');  // Yeşilin yoluna dokunur
+        },
+        
+        // Level 3: 5x5 Grid (8 Arrow, Paralel Çizgiler, Temiz Akış)
+        function() {
+            GRID_SIZE = 5;
+            grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+            
+            // Dikey paralel hatlar
+            grid[0][1] = createBox(COLORS.red, 3, 'down');
+            grid[0][3] = createBox(COLORS.blue, 3, 'down');
+            grid[4][1] = createBox(COLORS.green, 3, 'up');
+            grid[4][3] = createBox(COLORS.yellow, 3, 'up');
+            
+            // Yatay orta hatlar (Ortada kafa kafaya tek bir kavşak yaratır)
+            grid[2][0] = createBox(COLORS.purple, 2, 'right'); 
+            grid[2][4] = createBox(COLORS.red, 2, 'left');     
+            
+            // Ekstra küçük doldurucular (Bağımsız)
+            grid[1][2] = createBox(COLORS.blue, 1, 'right');
+            grid[3][2] = createBox(COLORS.green, 1, 'left');
+        },
+        
+        // Level 4: 6x6 Grid (14 Arrow, Aşırı Yoğun Ama Karmaşasız Akış)
+        function() {
+            GRID_SIZE = 6;
+            grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+            
+            // Sol taraftan sağa doğru akan paralel ordu
+            grid[0][0] = createBox(COLORS.red, 2, 'right');
+            grid[1][0] = createBox(COLORS.blue, 2, 'right');
+            grid[2][0] = createBox(COLORS.green, 2, 'right');
+            grid[3][0] = createBox(COLORS.yellow, 2, 'right');
+            grid[4][0] = createBox(COLORS.purple, 2, 'right');
+            grid[5][0] = createBox(COLORS.red, 2, 'right');
+            
+            // Sağ taraftan sola doğru akan paralel ordu
+            grid[0][5] = createBox(COLORS.yellow, 2, 'left');
+            grid[1][5] = createBox(COLORS.green, 2, 'left');
+            grid[2][5] = createBox(COLORS.blue, 2, 'left');
+            grid[3][5] = createBox(COLORS.red, 2, 'left');
+            grid[4][5] = createBox(COLORS.purple, 2, 'left');
+            grid[5][5] = createBox(COLORS.blue, 2, 'left');
+            
+            // Bu iki ordunun akışını kesen 2 adet ana dikey kutu (Beden çarpışması içerir)
+            grid[0][3] = createBox(COLORS.purple, 5, 'down'); // Tüm yatayları ortadan böler
+            grid[5][2] = createBox(COLORS.red, 5, 'up');      // Tüm yatayları aşağıdan yukarı böler
+        }
+    ];
+
+    function calculateLayout() {
+        GRID_TOTAL_SIZE = GRID_SIZE * CELL_SIZE;
+        OFFSET_X = (canvas.width - GRID_TOTAL_SIZE) / 2;
+        OFFSET_Y = BOTTOM_HALF_Y + (canvas.height - BOTTOM_HALF_Y - GRID_TOTAL_SIZE) / 2;
+    }
+
+    function loadLevel(index) {
+        gameState = 'PLAYING';
+        ballProcessState = 'IDLE'; 
+        matchQueue = []; 
+        flyingBalls = [];
+        remainingBallsQueue = []; 
+        queueBalls = []; 
+
+        levelText.innerText = "Level " + (index + 1);
+        prevBtn.disabled = (index === 0); 
+        nextBtn.disabled = (index === levels.length - 1); 
+
+        levels[index]();
+        calculateLayout();
+
+        let ballPool = [];
+        for (let r = 0; r < GRID_SIZE; r++) {
+            for (let c = 0; c < GRID_SIZE; c++) {
+                let item = grid[r][c];
+                if (item && item.type === 'box') {
+                    let totalSafes = item.num;
+                    let ballsNeeded = totalSafes * 4; 
+                    for (let i = 0; i < ballsNeeded; i++) {
+                        ballPool.push(item.color); 
+                    }
+                }
+            }
+        }
+
+        let colorCounts = {};
+        for (let color of ballPool) {
+            colorCounts[color] = (colorCounts[color] || 0) + 1;
+        }
+
+        let groupedPool = [];
+        let availableColors = Object.keys(colorCounts);
+        let lastColor = null;
+
+        while (availableColors.length > 0) {
+            let colorIdx = Math.floor(Math.random() * availableColors.length);
+            let selectedColor = availableColors[colorIdx];
+            
+            if (selectedColor === lastColor && availableColors.length > 1) {
+                colorIdx = (colorIdx + 1) % availableColors.length;
+                selectedColor = availableColors[colorIdx];
+            }
+
+            let possibleSizes = [2, 4, 4, 6, 6, 8, 12];
+            let requestedChunk = possibleSizes[Math.floor(Math.random() * possibleSizes.length)];
+            
+            let availableCount = colorCounts[selectedColor];
+            let actualChunk = Math.min(requestedChunk, availableCount);
+
+            for (let i = 0; i < actualChunk; i++) {
+                groupedPool.push(selectedColor);
+            }
+
+            colorCounts[selectedColor] -= actualChunk;
+            if (colorCounts[selectedColor] <= 0) {
+                availableColors.splice(colorIdx, 1);
+            }
+            
+            lastColor = selectedColor;
+        }
+
+        remainingBallsQueue = groupedPool; 
+
+        let ballsToPlace = Math.min(remainingBallsQueue.length, QUEUE_VISIBLE_SIZE);
+        for (let i = 0; i < ballsToPlace; i++) {
+            queueBalls.push({ color: remainingBallsQueue.shift(), dOffset: 0 });
+        }
+    }
+
+    prevBtn.addEventListener('click', () => {
+        if (currentLevel > 0) {
+            currentLevel--;
+            loadLevel(currentLevel);
+        }
+    });
+
+    nextBtn.addEventListener('click', () => {
+        if (currentLevel < levels.length - 1) {
+            currentLevel++;
+            loadLevel(currentLevel);
+        }
+    });
+
+    function findPathToSafe(r, c) {
+        if (r === 0) {
+            return [{r: 0, c: c}]; 
+        }
+        
+        let queue = [];
+        let visited = Array(GRID_SIZE).fill(false).map(() => Array(GRID_SIZE).fill(false));
+        let parent = {};
+        
+        const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+        
+        for (let [dr, dc] of dirs) {
+            let nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < GRID_SIZE && nc >= 0 && nc < GRID_SIZE) {
+                if (grid[nr][nc] === null) {
+                    queue.push({r: nr, c: nc});
+                    visited[nr][nc] = true;
+                    parent[`${nr},${nc}`] = {r: r, c: c};
+                }
+            }
+        }
+        
+        let entryNode = null;
+        
+        while(queue.length > 0) {
+            let curr = queue.shift();
+            
+            if (curr.r === 0) {
+                entryNode = curr;
+                break;
+            }
+            
+            for (let [dr, dc] of dirs) {
+                let nr = curr.r + dr, nc = curr.c + dc;
+                if (nr >= 0 && nr < GRID_SIZE && nc >= 0 && nc < GRID_SIZE) {
+                    if (grid[nr][nc] === null && !visited[nr][nc]) {
+                        visited[nr][nc] = true;
+                        parent[`${nr},${nc}`] = curr;
+                        queue.push({r: nr, c: nc});
+                    }
+                }
+            }
+        }
+        
+        if (!entryNode) return null; 
+        
+        let path = [];
+        let curr = entryNode;
+        while(curr) {
+            path.push({r: curr.r, c: curr.c});
+            let pKey = `${curr.r},${curr.c}`;
+            curr = parent[pKey];
+        }
+        
+        return path;
+    }
+
+    function updateAnimations(dt) {
+        if (gameState !== 'PLAYING') return; 
+
+        for (let r = 0; r < GRID_SIZE; r++) {
+            for (let c = 0; c < GRID_SIZE; c++) {
+                let item = grid[r][c];
+                if (!item) continue;
+
+                if (item.state === 'shaking') {
+                    item.time += dt;
+                    let shakeOffset = Math.sin(item.time / 10) * 5;
+
+                    if (item.dir === 'left' || item.dir === 'right') {
+                        item.offsetX = shakeOffset;
+                        item.offsetY = 0;
+                    } else if (item.dir === 'up' || item.dir === 'down') {
+                        item.offsetX = 0;
+                        item.offsetY = shakeOffset;
+                    }
+
+                    if (item.time > 200) { 
+                        item.state = 'idle';
+                        item.offsetX = 0;
+                        item.offsetY = 0;
+                    }
+                } else if (item.state === 'scaling_down') {
+                    item.time += dt;
+                    item.scale = Math.max(0, 1 - (item.time / 100)); 
+                    
+                    if (item.time > 100) { 
+                        grid[r][c] = null; 
+                    }
+                } else if (item.state === 'waiting') {
+                    item.time += dt;
+                    if (item.time > 0) { 
+                        item.state = 'jumping';
+                        item.time = 0;
+                    }
+                } else if (item.state === 'jumping') {
+                    item.time += dt;
+                    let p = item.time / 150; 
+                    if (p >= 1) {
+                        item.state = 'idle';
+                        item.scale = 1;
+                        item.offsetY = 0;
+                        if (ballProcessState === 'IDLE') {
+                            evaluateMatches();
+                        }
+                    } else {
+                        item.offsetY = Math.sin(p * Math.PI) * -15; 
+                        if (p < 0.7) item.scale = (p / 0.7) * 1.1; 
+                        else item.scale = 1.1 - ((p - 0.7) / 0.3) * 0.1; 
+                    }
+                } else if (item.state === 'scaling_out') {
+                    item.time += dt;
+                    let duration = 180; 
+                    let p = item.time / duration;
+
+                    if (p >= 1) {
+                        grid[r][c] = null; 
+                        if (ballProcessState === 'IDLE') {
+                            evaluateMatches();
+                        }
+                    } else {
+                        if (p < 0.3) item.scale = 1 + (p / 0.3) * 0.2; 
+                        else item.scale = 1.2 * (1 - (p - 0.3) / 0.7); 
+                    }
+                }
+            }
+        }
+
+        for (let i = flyingBalls.length - 1; i >= 0; i--) {
+            let fb = flyingBalls[i];
+            fb.time += dt;
+            let p = fb.time / fb.duration;
+
+            if (p >= 1) {
+                fb.targetSafe.visualBallCount++;
+                if (fb.targetSafe.visualBallCount >= 4) {
+                    fb.targetSafe.state = 'scaling_out';
+                    fb.targetSafe.time = 0;
+                }
+                flyingBalls.splice(i, 1);
+            } else {
+                let currentDist = p * fb.totalDist;
+                let currentX, currentY;
+                
+                for (let j = fb.segments.length - 1; j >= 0; j--) {
+                    let seg = fb.segments[j];
+                    if (currentDist >= seg.accumD || j === 0) {
+                        let segP = (currentDist - seg.accumD) / seg.d;
+                        if (seg.d === 0) segP = 0;
+                        
+                        let w1 = fb.waypoints[j];
+                        let w2 = fb.waypoints[j+1];
+                        currentX = w1.x + (w2.x - w1.x) * segP;
+                        currentY = w1.y + (w2.y - w1.y) * segP;
+                        
+                        if (j === 0) {
+                            currentY -= Math.sin(segP * Math.PI) * 40;
+                        }
+                        else if (j === fb.segments.length - 1) {
+                            currentY -= Math.sin(segP * Math.PI) * 15;
+                        }
+
+                        break;
+                    }
+                }
+                
+                fb.currentX = currentX;
+                fb.currentY = currentY;
+                fb.currentRadius = fb.startRadius + (fb.targetRadius - fb.startRadius) * p;
+            }
+        }
+
+        if (ballProcessState === 'GRAVITY') {
+            let slideFinished = true;
+            let slideSpeed = 0.38; 
+            
+            for (let b of queueBalls) {
+                if (b.dOffset > 0) {
+                    b.dOffset -= slideSpeed * dt;
+                    if (b.dOffset <= 0) b.dOffset = 0;
+                    else slideFinished = false;
+                }
+            }
+
+            if (slideFinished) {
+                ballProcessState = 'IDLE'; 
+                evaluateMatches();
+            }
+        }
+
+        if (ballProcessState === 'IDLE' && flyingBalls.length === 0) {
+            let isGridEmpty = true;
+            let canAnyBoxExpand = false;
+            let matchAvailable = false;
+            let isAnimating = false;
+
+            for (let r = 0; r < GRID_SIZE; r++) {
+                for (let c = 0; c < GRID_SIZE; c++) {
+                    let item = grid[r][c];
+                    if (item) {
+                        isGridEmpty = false;
+                        
+                        if (item.state !== 'idle') {
+                            isAnimating = true;
+                        }
+                        
+                        if (item.type === 'safe' && item.state !== 'scaling_out' && item.logicalBallCount < 4) {
+                            if (queueBalls.length > 0 && queueBalls[0].color === item.color) {
+                                if (findPathToSafe(r, c) !== null) {
+                                    matchAvailable = true;
+                                }
+                            }
+                        }
+
+                        if (item.type === 'box' && item.state === 'idle') {
+                            if (checkIfBoxCanExpand(r, c, item)) {
+                                canAnyBoxExpand = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (isGridEmpty && queueBalls.length === 0) {
+                gameState = 'WIN';
+            } 
+            else if (!isAnimating && !matchAvailable && !canAnyBoxExpand) {
+                gameState = 'FAIL'; 
+            }
+        }
+    }
+
+    function evaluateMatches() {
+        matchQueue = [];
+        
+        if(queueBalls.length > 0) {
+            let frontColor = queueBalls[0].color;
+            let candidates = [];
+
+            for(let r = 0; r < GRID_SIZE; r++) {
+                for(let c = 0; c < GRID_SIZE; c++) {
+                    let safe = grid[r][c];
+                    if(safe && safe.type === 'safe' && safe.state !== 'scaling_out' && safe.color === frontColor && safe.logicalBallCount < 4) { 
+                        let path = findPathToSafe(r, c);
+                        if (path !== null) {
+                            candidates.push({ safe: safe, r: r, c: c, path: path });
+                        }
+                    }
+                }
+            }
+            
+            if (candidates.length > 0) {
+                let tubeX = 225; 
+                let tubeY = 420; 
+
+                candidates.forEach(cand => {
+                    let entryX = OFFSET_X + cand.path[0].c * CELL_SIZE + CELL_SIZE / 2;
+                    let entryY = OFFSET_Y - CELL_SIZE / 2;
+                    let flyDist = Math.hypot(entryX - tubeX, entryY - tubeY);
+                    let walkDist = cand.path.length * CELL_SIZE;
+                    cand.trueDist = flyDist + walkDist; 
+                });
+
+                candidates.sort((a, b) => {
+                    if (b.safe.logicalBallCount !== a.safe.logicalBallCount) {
+                        return b.safe.logicalBallCount - a.safe.logicalBallCount;
+                    }
+                    return a.trueDist - b.trueDist;
+                });
+                
+                let best = candidates[0];
+                best.safe.logicalBallCount++; 
+                matchQueue.push({
+                    safe: best.safe,
+                    color: frontColor,
+                    r: best.r,
+                    c: best.c,
+                    path: best.path,
+                    holeIndex: best.safe.logicalBallCount - 1 
+                });
+            }
+        }
+
+        if (matchQueue.length > 0) {
+            ballProcessState = 'JUMPING';
+            executeNextJump();
+        } else {
+            ballProcessState = 'IDLE';
+        }
+    }
+
+    function executeNextJump() {
+        if (matchQueue.length === 0) {
+            ballProcessState = 'GRAVITY';
+            return;
+        }
+
+        let match = matchQueue.shift();
+        let safe = match.safe;
+        let r = match.r;
+        let c = match.c;
+        let path = match.path; 
+
+        let startPos = getPathPos(0);
+        let startX = startPos.x;
+        let startY = startPos.y;
+
+        let safeSize = CELL_SIZE - (GRID_PADDING * 2);
+        let padding = safeSize * 0.12;
+        let innerSize = safeSize - (padding * 2);
+        let cellSize = innerSize / 2; 
+        let targetRadius = cellSize * 0.40; 
+        
+        let holeRow = Math.floor(match.holeIndex / 2);
+        let holeCol = match.holeIndex % 2;
+
+        let safeTopLeftX = OFFSET_X + c * CELL_SIZE + GRID_PADDING;
+        let safeTopLeftY = OFFSET_Y + r * CELL_SIZE + GRID_PADDING;
+
+        let targetX = safeTopLeftX + padding + (holeCol * cellSize) + (cellSize / 2);
+        let targetY = safeTopLeftY + padding + (holeRow * cellSize) + (cellSize / 2);
+
+        let waypoints = [];
+        waypoints.push({ x: startX, y: startY }); 
+        
+        let entryX = OFFSET_X + path[0].c * CELL_SIZE + CELL_SIZE/2;
+        let entryY = OFFSET_Y - CELL_SIZE/2;
+        waypoints.push({ x: entryX, y: entryY });
+        
+        for (let i = 0; i < path.length - 1; i++) {
+            let p = path[i];
+            waypoints.push({
+                x: OFFSET_X + p.c * CELL_SIZE + CELL_SIZE/2,
+                y: OFFSET_Y + p.r * CELL_SIZE + CELL_SIZE/2
+            });
+        }
+        
+        waypoints.push({ x: targetX, y: targetY });
+        
+        let totalDist = 0;
+        let segments = [];
+        for(let i=0; i<waypoints.length-1; i++) {
+            let w1 = waypoints[i];
+            let w2 = waypoints[i+1];
+            let d = Math.hypot(w2.x - w1.x, w2.y - w1.y);
+            segments.push({ d: d, accumD: totalDist });
+            totalDist += d;
+        }
+
+        flyingBalls.push({
+            color: match.color,
+            waypoints: waypoints,
+            segments: segments,
+            totalDist: totalDist,
+            startRadius: QUEUE_BALL_RADIUS,
+            targetRadius: targetRadius,
+            time: 0,
+            duration: totalDist / 0.7, 
+            targetSafe: safe,
+            currentX: startX,
+            currentY: startY,
+            currentRadius: QUEUE_BALL_RADIUS
+        });
+
+        queueBalls.shift();
+        
+        for (let b of queueBalls) {
+            b.dOffset += QUEUE_SPACING;
+        }
+        
+        if (remainingBallsQueue.length > 0) {
+            let nextColor = remainingBallsQueue.shift();
+            queueBalls.push({ color: nextColor, dOffset: QUEUE_SPACING });
+        }
+
+        if (matchQueue.length > 0) {
+            setTimeout(executeNextJump, 150); 
+        } else {
+            ballProcessState = 'GRAVITY';
+        }
+    }
+
+    function drawBall(x, y, radius, color) {
+        ctx.save();
+        
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.12)';
+        ctx.shadowBlur = 4;
+        ctx.shadowOffsetY = 2;
+
+        let grad = ctx.createRadialGradient(
+            x - radius * 0.35, y - radius * 0.35, radius * 0.1,
+            x, y, radius
+        );
+        grad.addColorStop(0, adjustColor(color, 40));
+        grad.addColorStop(0.5, adjustColor(color, 10));
+        grad.addColorStop(1, adjustColor(color, -15));
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    function adjustColor(hex, lum) {
+        hex = String(hex).replace(/[^0-9a-f]/gi, '');
+        if (hex.length < 6) {
+            hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+        }
+        lum = lum || 0;
+        let rgb = "#", c, i;
+        for (i = 0; i < 3; i++) {
+            c = parseInt(hex.substr(i*2,2), 16);
+            c = Math.round(Math.min(Math.max(0, c + lum), 255)).toString(16);
+            rgb += ("00"+c).substr(c.length);
+        }
+        return rgb;
+    }
+
+    function traceTubePath(ctx) {
+        ctx.beginPath();
+        ctx.moveTo(pathSegments[0].p0.x, pathSegments[0].p0.y);
+        for(let seg of pathSegments) {
+            if(seg.type === 'line') {
+                ctx.lineTo(seg.p1.x, seg.p1.y);
+            } else if(seg.type === 'arc') {
+                ctx.arc(seg.center.x, seg.center.y, seg.r, seg.startAngle, seg.endAngle, seg.ccw);
+            }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        let topGrad = ctx.createLinearGradient(0, 0, 0, BOTTOM_HALF_Y);
+        topGrad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+        topGrad.addColorStop(1, 'rgba(241, 245, 249, 0.85)');
+        ctx.fillStyle = topGrad;
+        ctx.beginPath();
+        ctx.roundRect(0, 0, canvas.width, BOTTOM_HALF_Y, [24, 24, 0, 0]);
+        ctx.fill();
+
+        let bottomGrad = ctx.createLinearGradient(0, BOTTOM_HALF_Y, 0, canvas.height);
+        bottomGrad.addColorStop(0, 'rgba(255, 255, 255, 0.6)');
+        bottomGrad.addColorStop(1, 'rgba(248, 250, 252, 0.8)');
+        ctx.fillStyle = bottomGrad;
+        ctx.beginPath();
+        ctx.roundRect(0, BOTTOM_HALF_Y, canvas.width, canvas.height - BOTTOM_HALF_Y, [0, 0, 24, 24]);
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(20, BOTTOM_HALF_Y);
+        ctx.lineTo(canvas.width - 20, BOTTOM_HALF_Y);
+        ctx.stroke();
+
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        
+        ctx.lineWidth = QUEUE_BALL_RADIUS * 2 + 14; 
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.8)';
+        traceTubePath(ctx);
+        ctx.stroke();
+
+        ctx.lineWidth = QUEUE_BALL_RADIUS * 2 + 8;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        traceTubePath(ctx);
+        ctx.stroke();
+        
+        for (let i = 0; i < queueBalls.length; i++) {
+            let b = queueBalls[i];
+            let d = i * QUEUE_SPACING + b.dOffset;
+            let pos = getPathPos(d);
+            drawBall(pos.x, pos.y, QUEUE_BALL_RADIUS, b.color);
+        }
+
+        ctx.lineWidth = QUEUE_BALL_RADIUS * 2 + 8;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+        traceTubePath(ctx);
+        ctx.stroke();
+        
+        ctx.restore();
+
+        ctx.strokeStyle = 'rgba(203, 213, 225, 0.4)';
+        ctx.lineWidth = 2;
+        for (let r = 0; r < GRID_SIZE; r++) {
+            for (let c = 0; c < GRID_SIZE; c++) {
+                let x = OFFSET_X + c * CELL_SIZE;
+                let y = OFFSET_Y + r * CELL_SIZE;
+                ctx.beginPath();
+                ctx.roundRect(x, y, CELL_SIZE, CELL_SIZE, 10);
+                ctx.stroke();
+            }
+        }
+
+        for (let r = 0; r < GRID_SIZE; r++) {
+            for (let c = 0; c < GRID_SIZE; c++) {
+                let item = grid[r][c];
+                if (item) {
+                    let x = OFFSET_X + c * CELL_SIZE + GRID_PADDING;
+                    let y = OFFSET_Y + r * CELL_SIZE + GRID_PADDING;
+                    let size = CELL_SIZE - (GRID_PADDING * 2);
+
+                    if (item.type === 'box') {
+                        drawBox(x, y, size, item);
+                    } else if (item.type === 'safe') {
+                        drawSafe(x, y, size, item);
+                    }
+                }
+            }
+        }
+
+        for (let fb of flyingBalls) {
+            drawBall(fb.currentX, fb.currentY, fb.currentRadius, fb.color);
+        }
+
+        if (gameState === 'WIN' || gameState === 'FAIL') {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            if (gameState === 'WIN') {
+                ctx.fillStyle = '#10b981';
+                ctx.font = '800 42px Outfit, sans-serif';
+                ctx.shadowColor = 'rgba(16, 185, 129, 0.3)';
+                ctx.shadowBlur = 15;
+                ctx.fillText("KAZANDIN!", canvas.width / 2, canvas.height / 2 - 20);
+
+                ctx.fillStyle = '#334155';
+                ctx.font = '700 18px Outfit, sans-serif';
+                ctx.shadowBlur = 0;
+                let subText = currentLevel < levels.length - 1 ? "Sonraki Seviye İçin Tıklayın" : "TÜM BÖLÜMLERİ BİTİRDİN!";
+                ctx.fillText(subText, canvas.width / 2, canvas.height / 2 + 30);
+            } else {
+                ctx.fillStyle = '#ef4444';
+                ctx.font = '800 42px Outfit, sans-serif';
+                ctx.shadowColor = 'rgba(239, 68, 68, 0.3)';
+                ctx.shadowBlur = 15;
+                ctx.fillText("KAYBETTİN!", canvas.width / 2, canvas.height / 2 - 20);
+
+                ctx.fillStyle = '#334155';
+                ctx.font = '700 18px Outfit, sans-serif';
+                ctx.shadowBlur = 0;
+                ctx.fillText("Tekrar Oynamak İçin Tıklayın", canvas.width / 2, canvas.height / 2 + 30);
+            }
+            ctx.restore();
+        }
+    }
+
+    function roundedPolygonPath(ctx, points, radius) {
+        const n = points.length;
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+            let p0 = points[(i - 1 + n) % n];
+            let p1 = points[i];
+            let p2 = points[(i + 1) % n];
+
+            let v1x = p0.x - p1.x, v1y = p0.y - p1.y;
+            let v2x = p2.x - p1.x, v2y = p2.y - p1.y;
+            let len1 = Math.hypot(v1x, v1y);
+            let len2 = Math.hypot(v2x, v2y);
+            let r = Math.min(radius, len1 / 2, len2 / 2);
+
+            let p1a = { x: p1.x + (v1x / len1) * r, y: p1.y + (v1y / len1) * r };
+            let p1b = { x: p1.x + (v2x / len2) * r, y: p1.y + (v2y / len2) * r };
+
+            if (i === 0) ctx.moveTo(p1a.x, p1a.y);
+            else ctx.lineTo(p1a.x, p1a.y);
+            ctx.arcTo(p1.x, p1.y, p1b.x, p1b.y, r);
+        }
+        ctx.closePath();
+    }
+
+    function getBoxPoints(size, dir) {
+        const h = size / 2;
+        const notch = size * 0.32;
+        switch (dir) {
+            case 'up':
+                return [
+                    { x: -h, y: h }, { x: h, y: h }, { x: h, y: -h + notch },
+                    { x: 0, y: -h }, { x: -h, y: -h + notch }
+                ];
+            case 'down':
+                return [
+                    { x: -h, y: -h }, { x: h, y: -h }, { x: h, y: h - notch },
+                    { x: 0, y: h }, { x: -h, y: h - notch }
+                ];
+            case 'left':
+                return [
+                    { x: h, y: -h }, { x: h, y: h }, { x: -h + notch, y: h },
+                    { x: -h, y: 0 }, { x: -h + notch, y: -h }
+                ];
+            case 'right':
+                return [
+                    { x: -h, y: -h }, { x: -h, y: h }, { x: h - notch, y: h },
+                    { x: h, y: 0 }, { x: h - notch, y: -h }
+                ];
+        }
+    }
+
+    function drawBox(x, y, size, item) {
+        ctx.save();
+        let s = item.scale !== undefined ? item.scale : 1;
+        let dx = item.offsetX || 0;
+        let dy = item.offsetY || 0;
+        
+        ctx.translate(x + size / 2 + dx, y + size / 2 + dy);
+        ctx.scale(s, s);
+
+        let sx = -size / 2;
+        let sy = -size / 2;
+
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.12)';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 4;
+
+        let grad = ctx.createLinearGradient(sx, sy, sx, sy + size);
+        grad.addColorStop(0, adjustColor(item.color, -2));
+        grad.addColorStop(1, adjustColor(item.color, -37));
+
+        ctx.fillStyle = grad;
+        roundedPolygonPath(ctx, getBoxPoints(size, item.dir), 10);
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '800 22px Outfit, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(item.num, 0, 2);
+        
+        ctx.restore();
+    }
+
+    function drawSafe(x, y, size, item) {
+        if (item.scale === 0) return; 
+        
+        ctx.save();
+        let s = item.scale !== undefined ? item.scale : 1;
+        
+        let dx = item.offsetX || 0;
+        let dy = item.offsetY || 0;
+        ctx.translate(x + size / 2 + dx, y + size / 2 + dy);
+        ctx.scale(s, s);
+
+        let sx = -size / 2;
+        let sy = -size / 2;
+
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.1)';
+        ctx.shadowBlur = 6;
+        ctx.shadowOffsetY = 3;
+
+        let grad = ctx.createLinearGradient(sx, sy, sx + size, sy + size);
+        grad.addColorStop(0, adjustColor(item.color, -7));
+        grad.addColorStop(1, adjustColor(item.color, -47));
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.roundRect(sx, sy, size, size, 12);
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+
+        let padding = size * 0.12;
+        let innerSize = size - (padding * 2);
+        let cellSize = innerSize / 2; 
+        let radius = cellSize * 0.40;  
+
+        let filledCount = item.visualBallCount || 0;
+        let count = 0;
+
+        for (let row = 0; row < 2; row++) {
+            for (let col = 0; col < 2; col++) {
+                let cx = sx + padding + (col * cellSize) + (cellSize / 2);
+                let cy = sy + padding + (row * cellSize) + (cellSize / 2);
+                
+                if (count < filledCount) {
+                    drawBall(cx, cy, radius, item.color);
+                } else {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                count++;
+            }
+        }
+        
+        ctx.restore();
+    }
+
+    function checkIfBoxCanExpand(r, c, box) {
+        let n = box.num;
+        let dir = box.dir;
+
+        for (let i = 1; i <= n; i++) {
+            let tr = r;
+            let tc = c;
+
+            if (dir === 'up') tr -= i;
+            if (dir === 'down') tr += i;
+            if (dir === 'left') tc -= i;
+            if (dir === 'right') tc += i;
+
+            if (tr < 0 || tr >= GRID_SIZE || tc < 0 || tc >= GRID_SIZE) {
+                return false;
+            }
+
+            if (grid[tr][tc] !== null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    canvas.addEventListener('click', (e) => {
+        if (gameState === 'WIN') {
+            if (currentLevel < levels.length - 1) {
+                currentLevel++;
+                loadLevel(currentLevel);
+            } else {
+                currentLevel = 0; 
+                loadLevel(currentLevel);
+            }
+            return;
+        }
+
+        if (gameState === 'FAIL') {
+            loadLevel(currentLevel); 
+            return;
+        }
+
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        
+        const clickX = (e.clientX - rect.left) * scaleX;
+        const clickY = (e.clientY - rect.top) * scaleY;
+
+        if (clickX >= OFFSET_X && clickX < OFFSET_X + GRID_TOTAL_SIZE &&
+            clickY >= OFFSET_Y && clickY < OFFSET_Y + GRID_TOTAL_SIZE) {
+            
+            const c = Math.floor((clickX - OFFSET_X) / CELL_SIZE);
+            const r = Math.floor((clickY - OFFSET_Y) / CELL_SIZE);
+
+            const item = grid[r][c];
+            if (item) {
+                if (item.state !== 'idle') return; 
+
+                if (item.type === 'box') {
+                    processBoxClick(r, c, item);
+                } 
+            }
+        }
+    });
+
+    function processBoxClick(r, c, box) {
+        let canExpand = checkIfBoxCanExpand(r, c, box);
+        
+        if (canExpand) {
+            box.state = 'scaling_down';
+            box.time = 0;
+            
+            let targetCells = [];
+            let n = box.num;
+            let dir = box.dir;
+
+            for (let i = 1; i <= n; i++) {
+                let tr = r;
+                let tc = c;
+                if (dir === 'up') tr -= i;
+                if (dir === 'down') tr += i;
+                if (dir === 'left') tc -= i;
+                if (dir === 'right') tc += i;
+                targetCells.push({ r: tr, c: tc });
+            }
+
+            targetCells.forEach((cell, index) => {
+                grid[cell.r][cell.c] = { 
+                    type: 'safe', color: box.color, 
+                    logicalBallCount: 0, visualBallCount: 0, 
+                    state: 'waiting', time: -(index * 65), 
+                    scale: 0, offsetX: 0, offsetY: 0 
+                };
+            });
+        } else {
+            box.state = 'shaking';
+            box.time = 0;
+        }
+    }
+
+    loadLevel(currentLevel);
+    
+    let lastTime = performance.now();
+    function gameLoop(currentTime) {
+        let dt = currentTime - lastTime;
+        lastTime = currentTime;
+        updateAnimations(dt);
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+    
+    requestAnimationFrame(gameLoop);
+
+</script>
+
+</body></html>
